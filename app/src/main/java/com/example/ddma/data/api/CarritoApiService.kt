@@ -3,13 +3,9 @@ package com.example.ddma.data.api
 import com.example.ddma.data.model.CarritoDto
 import com.example.ddma.data.model.CarritoItemDto
 import com.example.ddma.data.model.UpdateCartItemRequest
+import com.example.ddma.data.model.payment.*
 import retrofit2.Response
-import retrofit2.http.Body
-import retrofit2.http.DELETE
-import retrofit2.http.GET
-import retrofit2.http.PUT
-import retrofit2.http.Path
-import retrofit2.http.Query
+import retrofit2.http.*
 
 interface CarritoApiService {
     @GET("api/Carritos")
@@ -26,4 +22,20 @@ interface CarritoApiService {
 
     @DELETE("api/Carritos/clear")
     suspend fun clearCart(): Response<Unit>
+
+    // Nuevos endpoints para Stripe
+    @POST("api/payments/create-payment-intent")
+    suspend fun createPaymentIntent(
+        @Body request: PaymentIntentRequest
+    ): Response<PaymentIntentResponse>
+
+    @POST("api/payments/confirm-payment")
+    suspend fun confirmPayment(
+        @Body request: ConfirmPaymentRequest
+    ): Response<PaymentConfirmationResponse>
+
+    @GET("api/payments/payment-methods")
+    suspend fun getPaymentMethods(
+        @Query("userId") userId: Int
+    ): Response<List<PaymentMethodResponse>>
 }

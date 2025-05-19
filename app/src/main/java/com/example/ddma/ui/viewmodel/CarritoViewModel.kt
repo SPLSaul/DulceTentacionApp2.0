@@ -30,6 +30,22 @@ class CarritoViewModel(
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+    private val _paymentState = MutableStateFlow<PaymentState>(PaymentState.Idle)
+    val paymentState: StateFlow<PaymentState> = _paymentState.asStateFlow()
+
+    sealed class PaymentState {
+        object Idle : PaymentState()
+        object Loading : PaymentState()
+        data class ReadyToPay(
+            val clientSecret: String,
+            val paymentIntentId: String,
+            val amount: Double
+        ) : PaymentState()
+        data class PaymentMethodsLoaded(val methods: List<PaymentMethodResponse>) : PaymentState()
+        data class Success(val paymentId: String, val receiptUrl: String?) : PaymentState()
+        data class Error(val message: String) : PaymentState()
+    }
+
     fun setUserId(userId: Int) {
         _userId = userId
         fetchCart()
@@ -188,6 +204,86 @@ class CarritoViewModel(
             items = emptyList(),
             customItems = emptyList()
         )
+    }
+    fun preparePayment() {
+        viewModelScope.launch {
+            _paymentState.value = PaymentState.Loading
+            cartState.value?.let { cart ->
+                when (val result = paymentRepository.createPaymentIntent(
+                    userId = _userId,
+                    cartId = cart.id,
+                    amount = cart.total
+                )) {
+                    is Result.Success -> {
+                        _paymentState.value = PaymentState.ReadyToPay(
+                            clientSecret = result.data.clientSecret,
+                            paymentIntentId = result.data.paymentIntentId,
+                            amount = result.data.amount / 100.0
+                        )
+                    }
+                    is Result.Failure -> {
+                        _paymentState.value = PaymentState.Error(
+                            result.exception.message ?: "Error al preparar el pago"
+                        )
+                    }
+                }
+            } ?: run {
+                _paymentState.value = PaymentState.Error("Carrito no disponible")
+            }
+        }
+    }
+
+    fun confirmPayment(paymentMethodId: String) {
+        viewModelScope.launch {
+            _paymentState.value = PaymentState.Loading
+            val currentState = _paymentState.value as? PaymentState.ReadyToPay ?: run {
+                _paymentState.value = PaymentState.Error("Estado de pago inválido")
+                return@launch
+            }
+
+            cartState.value?.let { cart ->
+                when (val result = paymentRepository.confirmPayment(
+                    paymentIntentId = currentState.paymentIntentId,
+                    paymentMethodId = paymentMethodId,
+                    userId = _userId,
+                    cartId = cart.id
+                )) {
+                    is Result.Success -> {
+                        _paymentState.value = PaymentState.Success(
+                            paymentId = result.data.paymentId,
+                            receiptUrl = result.data.receiptUrl
+                        )
+                        // Limpiar el carrito después de pago exitoso
+                        clearCart()
+                    }
+                    is Result.Failure -> {
+                        _paymentState.value = PaymentState.Error(
+                            result.exception.message ?: "Error al confirmar el pago"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun loadPaymentMethods() {
+        viewModelScope.launch {
+            _paymentState.value = PaymentState.Loading
+            when (val result = paymentRepository.getPaymentMethods(_userId)) {
+                is Result.Success -> {
+                    _paymentState.value = PaymentState.PaymentMethodsLoaded(result.data)
+                }
+                is Result.Failure -> {
+                    _paymentState.value = PaymentState.Error(
+                        result.exception.message ?: "Error al cargar métodos de pago"
+                    )
+                }
+            }
+        }
+    }
+
+    fun resetPaymentState() {
+        _paymentState.value = PaymentState.Idle
     }
 }
 
