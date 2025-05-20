@@ -1,7 +1,6 @@
 package com.example.ddma.ui.screens
 
 import android.os.Build
-import android.widget.Toast
 import androidx.annotation.RequiresExtension
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -27,9 +26,8 @@ import coil.request.ImageRequest
 import com.example.ddma.R
 import com.example.ddma.data.api.CarritoService
 import com.example.ddma.data.model.CarritoState
-import com.example.ddma.data.model.PastelesResponse
 import com.example.ddma.data.model.PastelesRepository
-import com.example.ddma.di.DependencyProvider
+import com.example.ddma.data.model.PastelesResponse
 import com.example.ddma.ui.viewmodel.PastelesViewModel
 import com.example.ddma.ui.viewmodel.PastelesViewModelFactory
 import kotlinx.coroutines.delay
@@ -40,7 +38,7 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PastelesScreen(
-    pastelesRepository: PastelesRepository,
+    pastelesRepository: PastelesRepository,  // Cambiado de Unit a PastelesRepository
     carritoService: CarritoService,
     userId: Int, // User ID parameter
     onNavigateBack: () -> Unit = {},

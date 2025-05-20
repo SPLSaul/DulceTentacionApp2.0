@@ -28,154 +28,180 @@ import com.example.ddma.data.api.CarritoApiService
 import com.example.ddma.data.model.CarritoDto
 import com.example.ddma.data.model.CarritoItemDto
 import com.example.ddma.data.model.CarritoCustomItemDto
+import com.example.ddma.data.repositories.PaymentRepository  // Add this import
 import com.example.ddma.di.DependencyProvider
 import com.example.ddma.ui.viewmodel.CarritoViewModel
 import com.example.ddma.ui.viewmodel.CarritoViewModelFactory
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.Composable
 
-
 @RequiresExtension(extension = Build.VERSION_CODES.S, version = 7)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CarritoScreen(
     userId: Int,
-    carritoApiService: CarritoApiService = DependencyProvider.carritoApiService,
     onNavigateBack: () -> Unit
 ) {
-    val context = LocalContext.current
+    // Use the existing PaymentRepository from DependencyProvider
     val factory = remember {
-        CarritoViewModelFactory(carritoApiService, context)
+        CarritoViewModelFactory(DependencyProvider.paymentRepository)
     }
+
     val viewModel: CarritoViewModel = viewModel(factory = factory)
     val cartState by viewModel.cartState.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
+    val clientSecret by viewModel.clientSecret.collectAsState()
+    val mostrarPantallaStripe by viewModel.mostrarPantallaStripe.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
-    // Initialize with the logged-in user's ID
-    LaunchedEffect(userId) {
-        if (userId > 0) {
-            viewModel.setUserId(userId)
-            viewModel.fetchCartWithRetry()
-        }else {
-            Log.e("CarritoScreen", "Error: Acción no permitida - userId: $userId")
-        }
-    }
-
-
-    LaunchedEffect(errorMessage) {
-        errorMessage?.let { message ->
-            coroutineScope.launch {
-                snackbarHostState.showSnackbar(message)
-                viewModel.clearErrorMessage()
+    if (mostrarPantallaStripe && clientSecret != null) {
+        PagoStripeScreen(
+            clientSecret = clientSecret!!,
+            onPaymentCompleted = {
+                viewModel.clearCart()
+                viewModel.setMostrarPantallaStripe(false)
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar("¡Pago completado con éxito!")
+                }
+            },
+            onPaymentFailed = { error ->
+                viewModel.setMostrarPantallaStripe(false)
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar("Error en el pago: $error")
+                }
+            },
+            onBackPressed = {
+                viewModel.setMostrarPantallaStripe(false)
+            }
+        )
+    } else {
+        // Inicializar con el ID de usuario
+        LaunchedEffect(userId) {
+            if (userId > 0) {
+                viewModel.setUserId(userId)
+                viewModel.fetchCartWithRetry()
+            } else {
+                Log.e("CarritoScreen", "Error: Acción no permitida - userId: $userId")
             }
         }
-    }
 
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = {
-            TopAppBar(
-                title = { Text("Mi Carrito") },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Regresar")
-                    }
-                },
-                actions = {
-                    if (cartState?.items?.isNotEmpty() == true || cartState?.customItems?.isNotEmpty() == true) {
-                        IconButton(
-                            onClick = {
-                                if (userId > 0) {
-                                    viewModel.clearCart()
-                                } else {
-                                    Log.e("CarritoScreen", "Error: Acción no permitida - userId: $userId")
-                                }
-                            },
-                            enabled = !isLoading && userId > 0
-                        ) {
-                            Icon(Icons.Default.Delete, contentDescription = "Vaciar carrito")
+        LaunchedEffect(errorMessage) {
+            errorMessage?.let { message ->
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar(message)
+                    viewModel.clearErrorMessage()
+                }
+            }
+        }
+
+        Scaffold(
+            snackbarHost = { SnackbarHost(snackbarHostState) },
+            topBar = {
+                TopAppBar(
+                    title = { Text("Mi Carrito") },
+                    navigationIcon = {
+                        IconButton(onClick = onNavigateBack) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "Regresar")
+                        }
+                    },
+                    actions = {
+                        if (cartState?.items?.isNotEmpty() == true || cartState?.customItems?.isNotEmpty() == true) {
+                            IconButton(
+                                onClick = {
+                                    if (userId > 0) {
+                                        viewModel.clearCart()
+                                    } else {
+                                        Log.e("CarritoScreen", "Error: Acción no permitida - userId: $userId")
+                                    }
+                                },
+                                enabled = !isLoading && userId > 0
+                            ) {
+                                Icon(Icons.Default.Delete, contentDescription = "Vaciar carrito")
+                            }
                         }
                     }
-                }
-            )
-        },
-        bottomBar = {
-            cartState?.let { cart ->
-                if (cart.items.isNotEmpty() || cart.customItems.isNotEmpty()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp)
-                            .background(MaterialTheme.colorScheme.surface)
-                    ) {
-                        Text(
-                            text = "Total: $${"%.2f".format(cart.total)}",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.align(Alignment.End)
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Button(
-                            onClick = { /* TODO: Navigate to checkout */ },
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = !isLoading && userId > 0
+                )
+            },
+            bottomBar = {
+                cartState?.let { cart ->
+                    if (cart.items.isNotEmpty() || cart.customItems.isNotEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp)
+                                .background(MaterialTheme.colorScheme.surface)
                         ) {
-                            if (isLoading) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
-                                    color = MaterialTheme.colorScheme.onPrimary
-                                )
-                            } else {
-                                Text("Proceder al pago")
+                            Text(
+                                text = "Total: $${"%.2f".format(cart.total)}",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.align(Alignment.End)
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(
+                                onClick = { viewModel.procesarPagoSimple() },
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !isLoading && userId > 0
+                            ) {
+                                if (isLoading) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        color = MaterialTheme.colorScheme.onPrimary
+                                    )
+                                } else {
+                                    Text("Proceder al pago")
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-    ) { padding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
-            when {
-                userId <= 0 -> {
-                    Column(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.Center,
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text("Por favor inicie sesión para ver su carrito")
-                        Button(
-                            onClick = { /* Navigate to login */ },
-                            modifier = Modifier.padding(top = 16.dp)
+        ) { padding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+            ) {
+                when {
+                    userId <= 0 -> {
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.Center,
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Text("Ir a inicio de sesión")
+                            Text("Por favor inicie sesión para ver su carrito")
+                            Button(
+                                onClick = { /* Navigate to login */ },
+                                modifier = Modifier.padding(top = 16.dp)
+                            ) {
+                                Text("Ir a inicio de sesión")
+                            }
                         }
                     }
-                }
-                isLoading && cartState == null -> {
-                    CircularProgressIndicator(
-                        modifier = Modifier.align(Alignment.Center)
-                    )
-                }
-                cartState?.items?.isEmpty() == true && cartState?.customItems?.isEmpty() == true -> {
-                    EmptyCartView(
-                        onRetry = { viewModel.fetchCartWithRetry() },
-                        isLoading = isLoading
-                    )
-                }
-                else -> {
-                    cartState?.let { cart ->
-                        CarritoList(
-                            cart = cart,
-                            viewModel = viewModel,
-                            userId = userId
+
+                    isLoading && cartState == null -> {
+                        CircularProgressIndicator(
+                            modifier = Modifier.align(Alignment.Center)
                         )
+                    }
+
+                    cartState?.items?.isEmpty() == true && cartState?.customItems?.isEmpty() == true -> {
+                        EmptyCartView(
+                            onRetry = { viewModel.fetchCartWithRetry() },
+                            isLoading = isLoading
+                        )
+                    }
+
+                    else -> {
+                        cartState?.let { cart ->
+                            CarritoList(
+                                cart = cart,
+                                viewModel = viewModel,
+                                userId = userId
+                            )
+                        }
                     }
                 }
             }

@@ -1,116 +1,124 @@
 package com.example.ddma.di
 
 import android.content.Context
-import com.example.ddma.data.api.CarritoApiService
-import com.example.ddma.data.model.ApiService
-import com.example.ddma.data.api.CarritoService
-import com.example.ddma.data.model.PastelesRepository
+import com.example.ddma.data.api.*
+import com.example.ddma.data.model.*
 import com.example.ddma.data.model.payment.ConfirmPaymentRequest
 import com.example.ddma.data.model.payment.PaymentConfirmationResponse
 import com.example.ddma.data.model.payment.PaymentIntentRequest
 import com.example.ddma.data.model.payment.PaymentIntentResponse
 import com.example.ddma.data.model.payment.PaymentMethodResponse
-import com.example.ddma.data.repositories.PaymentRepository
+import com.example.ddma.data.repositories.*
+import com.stripe.android.BuildConfig
 import com.stripe.android.PaymentConfiguration
-import okhttp3.OkHttpClient
+import okhttp3.*
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
-import java.util.concurrent.TimeUnit
-import okhttp3.JavaNetCookieJar
-import okhttp3.Response
-import retrofit2.http.Body
-import retrofit2.http.GET
-import retrofit2.http.POST
-import retrofit2.http.Query
+import retrofit2.http.*
 import java.net.CookieManager
 import java.net.CookiePolicy
+import java.util.concurrent.TimeUnit
 
 object DependencyProvider {
-    private var appContext: Context? = null
-    private const val STRIPE_PUBLISHABLE_KEY = "pk_test_51QyfjmJrA7WETaGHhtzTuabVrpFdxenPYTktuYO5ByYpKf99BmjOmooflPePuqODG7Rvf0NuIe0EahaSq0oaJcIM00PYF5tDXU" // Reemplaza con tu clave de Stripe
+    private lateinit var applicationContext: Context
 
-    fun initialize(context: Context) {
-        appContext = context.applicationContext
-        // Configuración inicial de Stripe
-        PaymentConfiguration.init(
-            context,
-            STRIPE_PUBLISHABLE_KEY
-        )
-    }
+    // Configuración de Stripe
+    private const val STRIPE_PUBLISHABLE_KEY = "pk_test_51QyfjmJrA7WETaGHhtzTuabVrpFdxenPYTktuYO5ByYpKf99BmjOmooflPePuqODG7Rvf0NuIe0EahaSq0oaJcIM00PYF5tDXU"
 
-    private val retrofit by lazy {
-        val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
-        }
-
-        val cookieManager = CookieManager().apply {
-            setCookiePolicy(CookiePolicy.ACCEPT_ALL)
-        }
-
-        val client = OkHttpClient.Builder()
-            .cookieJar(JavaNetCookieJar(cookieManager))
-            .addInterceptor(logging)
-            .addInterceptor { chain ->
-                val request = chain.request().newBuilder()
-                    .addHeader("Accept", "application/json")
-                    .addHeader("Content-Type", "application/json")
-                    .build()
-                chain.proceed(request)
-            }
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
-            .build()
-
+    // Configuración de Retrofit
+    private val retrofit: Retrofit by lazy {
         Retrofit.Builder()
             .baseUrl("https://ddkmaapi-ewcndnazfmfnhkfv.centralus-01.azurewebsites.net/")
-            .client(client)
+            .client(okHttpClient)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
     }
 
-    // Servicios existentes
-    fun provideCarritoService(): CarritoService {
-        return retrofit.create(CarritoService::class.java)
+    private val okHttpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder().apply {
+            cookieJar(JavaNetCookieJar(cookieManager))
+            addInterceptor(httpLoggingInterceptor)
+            addInterceptor(authInterceptor)
+            connectTimeout(30, TimeUnit.SECONDS)
+            readTimeout(30, TimeUnit.SECONDS)
+            writeTimeout(30, TimeUnit.SECONDS)
+        }.build()
     }
 
-    fun providePastelesRepository(): PastelesRepository {
-        return PastelesRepository(retrofit.create(ApiService::class.java))
+    private val cookieManager: CookieManager by lazy {
+        CookieManager().apply {
+            setCookiePolicy(CookiePolicy.ACCEPT_ALL)
+        }
     }
 
+    private val httpLoggingInterceptor: HttpLoggingInterceptor by lazy {
+        HttpLoggingInterceptor().apply {
+            level = if (BuildConfig.DEBUG) {
+                HttpLoggingInterceptor.Level.BODY
+            } else {
+                HttpLoggingInterceptor.Level.NONE
+            }
+        }
+    }
+
+    private val authInterceptor: Interceptor by lazy {
+        Interceptor { chain ->
+            val request = chain.request().newBuilder().apply {
+                addHeader("Accept", "application/json")
+                addHeader("Content-Type", "application/json")
+                // Agregar headers de autenticación si es necesario
+            }.build()
+            chain.proceed(request)
+        }
+    }
+
+    // Inicialización
+    fun init(context: Context) {
+        applicationContext = context.applicationContext
+        PaymentConfiguration.init(context, STRIPE_PUBLISHABLE_KEY)
+    }
+
+    // Servicios API
+    val carritoApiService: CarritoApiService by lazy {
+        retrofit.create(CarritoApiService::class.java)
+    }
     val carritoService: CarritoService by lazy {
         retrofit.create(CarritoService::class.java)
     }
 
-    val carritoApiService: CarritoApiService by lazy {
-        retrofit.create(CarritoApiService::class.java)
-    }
-
-    // Nuevos servicios para Stripe
     val paymentApiService: PaymentApiService by lazy {
         retrofit.create(PaymentApiService::class.java)
     }
 
+    // Repositorios
     val paymentRepository: PaymentRepository by lazy {
         PaymentRepository(paymentApiService)
     }
+    val apiService: ApiService by lazy {
+        retrofit.create(ApiService::class.java)
+    }
+
+    val pastelesRepository: PastelesRepository by lazy {
+        PastelesRepository(apiService)
+    }
+
 
     // Interfaz para el servicio de pagos
     interface PaymentApiService {
         @POST("api/payments/create-payment-intent")
         suspend fun createPaymentIntent(
             @Body request: PaymentIntentRequest
-        ): Response<PaymentIntentResponse>
+        ): retrofit2.Response<PaymentIntentResponse>
 
         @POST("api/payments/confirm-payment")
         suspend fun confirmPayment(
             @Body request: ConfirmPaymentRequest
-        ): Response<PaymentConfirmationResponse>
+        ): retrofit2.Response<PaymentConfirmationResponse>
 
         @GET("api/payments/payment-methods")
         suspend fun getPaymentMethods(
             @Query("userId") userId: Int
-        ): Response<List<PaymentMethodResponse>>
+        ): retrofit2.Response<List<PaymentMethodResponse>>
     }
 }

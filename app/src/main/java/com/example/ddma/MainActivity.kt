@@ -1,8 +1,8 @@
 package com.example.ddma
 
 import android.os.Build
-import androidx.activity.ComponentActivity
 import android.os.Bundle
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.annotation.RequiresExtension
@@ -11,6 +11,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.example.ddma.data.api.CarritoService
 import com.example.ddma.di.DependencyProvider
 import com.example.ddma.ui.screens.CarritoScreen
 import com.example.ddma.ui.screens.LoginScreen
@@ -23,9 +24,13 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // Initialize dependencies
-        val carritoService = DependencyProvider.provideCarritoService()
-        val pastelesRepository = DependencyProvider.providePastelesRepository()
+        // Inicializar dependencias
+        DependencyProvider.init(applicationContext)
+
+        // Obtener instancias de los repositorios y servicios
+        val carritoService = DependencyProvider.carritoService
+        val paymentRepository = DependencyProvider.paymentRepository
+        val pastelesRepository = DependencyProvider.pastelesRepository
 
         setContent {
             DdmaTheme {
@@ -38,7 +43,6 @@ class MainActivity : ComponentActivity() {
                     composable("login") {
                         LoginScreen(
                             onLoginSuccess = { userId ->
-                                // Validate userId before navigation
                                 if (userId > 0) {
                                     navController.navigate("pasteles/$userId") {
                                         popUpTo("login") { inclusive = true }
@@ -52,20 +56,19 @@ class MainActivity : ComponentActivity() {
                         route = "pasteles/{userId}",
                         arguments = listOf(navArgument("userId") {
                             type = NavType.IntType
-                            defaultValue = -1  // Invalid default
+                            defaultValue = -1
                         })
                     ) { backStackEntry ->
                         val userId = backStackEntry.arguments?.getInt("userId") ?: -1
 
                         if (userId <= 0) {
-                            // Handle invalid userId - navigate back to login
                             navController.navigate("login") {
                                 popUpTo("pasteles/{userId}") { inclusive = true }
                             }
                         } else {
                             PastelesScreen(
                                 pastelesRepository = pastelesRepository,
-                                carritoService = carritoService,
+                                carritoService = carritoService as CarritoService,
                                 userId = userId,
                                 onNavigateBack = { navController.popBackStack() },
                                 onNavigateToCart = {
@@ -79,13 +82,12 @@ class MainActivity : ComponentActivity() {
                         route = "carrito/{userId}",
                         arguments = listOf(navArgument("userId") {
                             type = NavType.IntType
-                            defaultValue = -1  // Invalid default
+                            defaultValue = -1
                         })
                     ) { backStackEntry ->
                         val userId = backStackEntry.arguments?.getInt("userId") ?: -1
 
                         if (userId <= 0) {
-                            // Handle invalid userId - navigate back to login
                             navController.navigate("login") {
                                 popUpTo("carrito/{userId}") { inclusive = true }
                             }

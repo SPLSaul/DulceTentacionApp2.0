@@ -46,7 +46,7 @@ dependencies {
     implementation(libs.coil.compose) // Usa la versión más reciente
     implementation(libs.androidx.navigation.compose) // Usa la versión más reciente y estable
     implementation(libs.androidx.activity.compose)
-    implementation ("com.stripe:stripe-android:21.13.0")
+    implementation (libs.stripe.android)
     implementation ("androidx.activity:activity-compose:1.8.2")
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)

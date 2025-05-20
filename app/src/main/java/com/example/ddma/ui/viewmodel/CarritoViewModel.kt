@@ -1,26 +1,31 @@
 package com.example.ddma.ui.viewmodel
 
-import android.content.Context
+import android.util.Log
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.ddma.data.api.CarritoApiService
-import com.example.ddma.data.model.*
+import com.example.ddma.data.model.CarritoDto
+import com.example.ddma.data.model.UpdateCartItemRequest
+import com.example.ddma.data.model.payment.ConfirmPaymentRequest
+import com.example.ddma.data.model.payment.PaymentIntentRequest
+import com.example.ddma.data.model.payment.PaymentMethodResponse
+import com.example.ddma.data.repositories.PaymentRepository
+import com.example.ddma.di.DependencyProvider
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
+import retrofit2.HttpException
 import java.io.IOException
-import java.net.SocketTimeoutException
-import java.text.SimpleDateFormat
-import java.util.*
+import java.lang.Exception
 
 class CarritoViewModel(
-    private val carritoApiService: CarritoApiService,
-    context: Context
+    private val paymentRepository: PaymentRepository
 ) : ViewModel() {
-    private var _userId = 0
+    internal val _mostrarPantallaStripe = MutableStateFlow(false)
+    val mostrarPantallaStripe: StateFlow<Boolean> = _mostrarPantallaStripe
+    private val carritoApiService: CarritoApiService = DependencyProvider.carritoApiService
+
     private val _cartState = MutableStateFlow<CarritoDto?>(null)
     val cartState: StateFlow<CarritoDto?> = _cartState.asStateFlow()
 
@@ -30,122 +35,83 @@ class CarritoViewModel(
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
-    private val _paymentState = MutableStateFlow<PaymentState>(PaymentState.Idle)
-    val paymentState: StateFlow<PaymentState> = _paymentState.asStateFlow()
+    private val _paymentMethods = MutableStateFlow<List<PaymentMethodResponse>>(emptyList())
+    val paymentMethods: StateFlow<List<PaymentMethodResponse>> = _paymentMethods.asStateFlow()
 
-    sealed class PaymentState {
-        object Idle : PaymentState()
-        object Loading : PaymentState()
-        data class ReadyToPay(
-            val clientSecret: String,
-            val paymentIntentId: String,
-            val amount: Double
-        ) : PaymentState()
-        data class PaymentMethodsLoaded(val methods: List<PaymentMethodResponse>) : PaymentState()
-        data class Success(val paymentId: String, val receiptUrl: String?) : PaymentState()
-        data class Error(val message: String) : PaymentState()
+    // Payment intent information
+    private val _clientSecret = MutableStateFlow<String?>(null)
+    val clientSecret: StateFlow<String?> = _clientSecret.asStateFlow()
+
+    private val _paymentIntentId = MutableStateFlow<String?>(null)
+    val paymentIntentId: StateFlow<String?> = _paymentIntentId.asStateFlow()
+
+    private var userId: Int = 0
+
+    fun setUserId(id: Int) {
+        userId = id
     }
-
-    fun setUserId(userId: Int) {
-        _userId = userId
-        fetchCart()
+    fun setMostrarPantallaStripe(value: Boolean) {
+        _mostrarPantallaStripe.value = value
     }
+    fun fetchCartWithRetry() {
+        if (userId <= 0) {
+            _errorMessage.value = "Usuario no identificado"
+            return
+        }
 
-    fun fetchCart() {
+        _isLoading.value = true
         viewModelScope.launch {
-            _isLoading.value = true
             try {
-                val response = carritoApiService.getUserCart(_userId)
-                when {
-                    response.isSuccessful -> {
-                        _cartState.value = response.body() ?: createEmptyCart()
-                    }
-                    response.code() == 500 -> {
-                        _errorMessage.value = "Server error. Please try again later."
-                        // Try to create an empty cart as fallback
-                        _cartState.value = createEmptyCart()
-                    }
-                    else -> {
-                        _errorMessage.value = "Error ${response.code()}: ${response.message()}"
-                    }
+                val response = carritoApiService.getUserCart(userId)
+                if (response.isSuccessful) {
+                    _cartState.value = response.body()
+                } else {
+                    _errorMessage.value = "Error: ${response.message()}"
                 }
-            } catch (e: SocketTimeoutException) {
-                _errorMessage.value = "Request timed out. Please check your connection."
             } catch (e: IOException) {
-                _errorMessage.value = "Network error. Please check your internet connection."
+                _errorMessage.value = "Error de conexión: ${e.message}"
+                Log.e("CarritoViewModel", "Error de conexión", e)
+            } catch (e: HttpException) {
+                _errorMessage.value = "Error HTTP: ${e.message}"
+                Log.e("CarritoViewModel", "Error HTTP", e)
             } catch (e: Exception) {
-                _errorMessage.value = "Unexpected error: ${e.message}"
+                _errorMessage.value = "Error desconocido: ${e.message}"
+                Log.e("CarritoViewModel", "Error desconocido", e)
             } finally {
                 _isLoading.value = false
             }
         }
     }
-    private var retryCount = 0
-    private val MAX_RETRIES = 2
-
-    fun fetchCartWithRetry() {
-        viewModelScope.launch {
-            _isLoading.value = true
-            var success = false
-
-            while (retryCount < MAX_RETRIES && !success) {
-                try {
-                    val response = carritoApiService.getUserCart(_userId)
-                    when {
-                        response.isSuccessful -> {
-                            _cartState.value = response.body() ?: createEmptyCart()
-                            success = true
-                            retryCount = 0
-                        }
-                        response.code() == 500 -> {
-                            retryCount++
-                            if (retryCount >= MAX_RETRIES) {
-                                _errorMessage.value = "Server error. Showing empty cart."
-                                _cartState.value = createEmptyCart()
-                            }
-                            delay((1000L * retryCount).toLong()) // Fixed delay
-                        }
-                        else -> {
-                            _errorMessage.value = "Error ${response.code()}: ${response.message()}"
-                            _cartState.value = createEmptyCart()
-                            return@launch
-                        }
-                    }
-                } catch (e: Exception) {
-                    retryCount++
-                    if (retryCount >= MAX_RETRIES) {
-                        _errorMessage.value = when (e) {
-                            is SocketTimeoutException -> "Connection timed out"
-                            is IOException -> "Network error"
-                            else -> "Unexpected error"
-                        }
-                        _cartState.value = createEmptyCart()
-                    }
-                    delay((1000L * retryCount).toLong()) // Fixed delay
-                }
-            }
-            _isLoading.value = false
-        }
-    }
 
     fun updateItemQuantity(itemId: Int, newQuantity: Int) {
+        if (userId <= 0) return
+
+        _isLoading.value = true
         viewModelScope.launch {
-            _isLoading.value = true
             try {
-                val updateRequest = UpdateCartItemRequest(
-                    userId = _userId,
-                    productId = itemId,
+                // Get the pastelId for the cart item from the current state
+                val pastelId = _cartState.value?.items?.find { it.id == itemId }?.pastelId
+                    ?: run {
+                        _errorMessage.value = "No se pudo encontrar el pastel correspondiente"
+                        _isLoading.value = false
+                        return@launch
+                    }
+
+                val request = UpdateCartItemRequest(
+                    userId = userId,
+                    productId = pastelId,
                     quantity = newQuantity
                 )
-                val response = carritoApiService.updateCartItem(itemId, updateRequest) // Pass itemId and updateRequest
 
+                val response = carritoApiService.updateCartItem(itemId, request)
                 if (response.isSuccessful) {
-                    fetchCart() // Refresh the cart
+                    fetchCartWithRetry() // Reload cart after update
                 } else {
                     _errorMessage.value = "Error al actualizar cantidad: ${response.message()}"
                 }
             } catch (e: Exception) {
-                _errorMessage.value = "Error de conexión: ${e.message}"
+                _errorMessage.value = "Error al actualizar cantidad: ${e.message}"
+                Log.e("CarritoViewModel", "Error al actualizar cantidad", e)
             } finally {
                 _isLoading.value = false
             }
@@ -153,18 +119,20 @@ class CarritoViewModel(
     }
 
     fun removeItem(itemId: Int) {
+        if (userId <= 0) return
+
+        _isLoading.value = true
         viewModelScope.launch {
-            _isLoading.value = true
             try {
                 val response = carritoApiService.removeFromCart(itemId)
-
                 if (response.isSuccessful) {
-                    fetchCart() // Refresh the cart
+                    fetchCartWithRetry() // Reload cart after removal
                 } else {
-                    _errorMessage.value = "Error al eliminar el ítem: ${response.message()}"
+                    _errorMessage.value = "Error al eliminar ítem: ${response.message()}"
                 }
             } catch (e: Exception) {
-                _errorMessage.value = "Error de conexión: ${e.message}"
+                _errorMessage.value = "Error al eliminar ítem: ${e.message}"
+                Log.e("CarritoViewModel", "Error al eliminar ítem", e)
             } finally {
                 _isLoading.value = false
             }
@@ -172,131 +140,239 @@ class CarritoViewModel(
     }
 
     fun clearCart() {
+        if (userId <= 0) return
+
+        _isLoading.value = true
         viewModelScope.launch {
-            _isLoading.value = true
             try {
                 val response = carritoApiService.clearCart()
                 if (response.isSuccessful) {
-                    _cartState.value = createEmptyCart()
+                    // Create an empty cart with the same structure as the CarritoDto
+                    _cartState.value = CarritoDto(
+                        id = 0,
+                        usuarioId = userId,
+                        fecha = "",
+                        activo = true,
+                        total = 0.0,
+                        items = emptyList(),
+                        customItems = emptyList()
+                    )
                 } else {
                     _errorMessage.value = "Error al vaciar carrito: ${response.message()}"
                 }
             } catch (e: Exception) {
-                _errorMessage.value = "Error de conexión: ${e.message}"
+                _errorMessage.value = "Error al vaciar carrito: ${e.message}"
+                Log.e("CarritoViewModel", "Error al vaciar carrito", e)
             } finally {
                 _isLoading.value = false
             }
         }
     }
 
-    fun clearErrorMessage() {
-        _errorMessage.value = null
-    }
+    // Payment-related methods that use the PaymentRepository
+    fun createPaymentIntent() {
+        if (userId <= 0) {
+            _errorMessage.value = "Usuario no identificado"
+            return
+        }
 
-    private fun createEmptyCart(): CarritoDto {
-        val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-        return CarritoDto(
-            id = 0,
-            usuarioId = _userId,
-            fecha = dateFormat.format(Date()),
-            activo = true,
-            total = 0.0,
-            items = emptyList(),
-            customItems = emptyList()
-        )
-    }
-    fun preparePayment() {
+        val cart = _cartState.value ?: run {
+            _errorMessage.value = "No hay carrito disponible"
+            return
+        }
+
+        if (cart.total <= 0.0) {
+            _errorMessage.value = "El total del carrito debe ser mayor a cero"
+            return
+        }
+
+        _isLoading.value = true
         viewModelScope.launch {
-            _paymentState.value = PaymentState.Loading
-            cartState.value?.let { cart ->
-                when (val result = paymentRepository.createPaymentIntent(
-                    userId = _userId,
+            try {
+                // Convert total to cents for Stripe (minimum 50 cents)
+                val amountInCents = (cart.total * 100).toLong().coerceAtLeast(50)
+
+                val request = PaymentIntentRequest(
+                    userId = userId,
+                    amount = amountInCents,
                     cartId = cart.id,
-                    amount = cart.total
-                )) {
-                    is Result.Success -> {
-                        _paymentState.value = PaymentState.ReadyToPay(
-                            clientSecret = result.data.clientSecret,
-                            paymentIntentId = result.data.paymentIntentId,
-                            amount = result.data.amount / 100.0
-                        )
+                    description = "Compra de pasteles - Carrito #${cart.id}"
+                )
+
+                paymentRepository.createPaymentIntent(request)
+                    .onSuccess { response ->
+                        _clientSecret.value = response.clientSecret
+                        _paymentIntentId.value = response.paymentIntentId
+                        Log.d("CarritoViewModel", "Payment intent created: ${response.paymentIntentId}")
                     }
-                    is Result.Failure -> {
-                        _paymentState.value = PaymentState.Error(
-                            result.exception.message ?: "Error al preparar el pago"
-                        )
+                    .onFailure { exception ->
+                        _errorMessage.value = "Error al crear intento de pago: ${exception.message}"
+                        Log.e("CarritoViewModel", "Error al crear intento de pago", exception)
                     }
-                }
-            } ?: run {
-                _paymentState.value = PaymentState.Error("Carrito no disponible")
+            } catch (e: Exception) {
+                _errorMessage.value = "Error al crear intento de pago: ${e.message}"
+                Log.e("CarritoViewModel", "Error al crear intento de pago", e)
+            } finally {
+                _isLoading.value = false
             }
         }
     }
 
     fun confirmPayment(paymentMethodId: String) {
-        viewModelScope.launch {
-            _paymentState.value = PaymentState.Loading
-            val currentState = _paymentState.value as? PaymentState.ReadyToPay ?: run {
-                _paymentState.value = PaymentState.Error("Estado de pago inválido")
-                return@launch
-            }
+        if (userId <= 0) {
+            _errorMessage.value = "Usuario no identificado"
+            return
+        }
 
-            cartState.value?.let { cart ->
-                when (val result = paymentRepository.confirmPayment(
-                    paymentIntentId = currentState.paymentIntentId,
+        val cart = _cartState.value ?: run {
+            _errorMessage.value = "No hay carrito disponible"
+            return
+        }
+
+        val paymentIntentId = _paymentIntentId.value ?: run {
+            _errorMessage.value = "No hay intento de pago activo"
+            return
+        }
+
+        _isLoading.value = true
+        viewModelScope.launch {
+            try {
+                val request = ConfirmPaymentRequest(
+                    paymentIntentId = paymentIntentId,
                     paymentMethodId = paymentMethodId,
-                    userId = _userId,
-                    cartId = cart.id
-                )) {
-                    is Result.Success -> {
-                        _paymentState.value = PaymentState.Success(
-                            paymentId = result.data.paymentId,
-                            receiptUrl = result.data.receiptUrl
-                        )
-                        // Limpiar el carrito después de pago exitoso
-                        clearCart()
+                    userId = userId,
+                    cartId = cart.id,
+                    savePaymentMethod = true // Save payment method for future use
+                )
+
+                paymentRepository.confirmPayment(request)
+                    .onSuccess { response ->
+                        if (response.success) {
+                            // Handle successful payment confirmation
+                            Log.d("CarritoViewModel", "Payment confirmed: ${response.paymentId}")
+                            if (response.orderId != null) {
+                                Log.d("CarritoViewModel", "Order created: ${response.orderId}")
+                            }
+
+                            // Clear payment intent info
+                            _clientSecret.value = null
+                            _paymentIntentId.value = null
+
+                            // Clear cart after successful payment
+                            clearCart()
+                        } else if (response.requiresAction) {
+                            // Handle cases where additional action is needed (3D Secure, etc.)
+                            _errorMessage.value = "Se requiere una acción adicional: ${response.nextAction}"
+                        } else {
+                            _errorMessage.value = "La confirmación del pago falló"
+                        }
                     }
-                    is Result.Failure -> {
-                        _paymentState.value = PaymentState.Error(
-                            result.exception.message ?: "Error al confirmar el pago"
-                        )
+                    .onFailure { exception ->
+                        _errorMessage.value = "Error al confirmar pago: ${exception.message}"
+                        Log.e("CarritoViewModel", "Error al confirmar pago", exception)
                     }
-                }
+            } catch (e: Exception) {
+                _errorMessage.value = "Error al confirmar pago: ${e.message}"
+                Log.e("CarritoViewModel", "Error al confirmar pago", e)
+            } finally {
+                _isLoading.value = false
             }
         }
     }
 
-    fun loadPaymentMethods() {
+    fun fetchPaymentMethods() {
+        if (userId <= 0) {
+            _errorMessage.value = "Usuario no identificado"
+            return
+        }
+
+        _isLoading.value = true
         viewModelScope.launch {
-            _paymentState.value = PaymentState.Loading
-            when (val result = paymentRepository.getPaymentMethods(_userId)) {
-                is Result.Success -> {
-                    _paymentState.value = PaymentState.PaymentMethodsLoaded(result.data)
-                }
-                is Result.Failure -> {
-                    _paymentState.value = PaymentState.Error(
-                        result.exception.message ?: "Error al cargar métodos de pago"
-                    )
-                }
+            try {
+                paymentRepository.getPaymentMethods(userId)
+                    .onSuccess { methods ->
+                        _paymentMethods.value = methods
+                    }
+                    .onFailure { exception ->
+                        _errorMessage.value = "Error al obtener métodos de pago: ${exception.message}"
+                        Log.e("CarritoViewModel", "Error al obtener métodos de pago", exception)
+                    }
+            } catch (e: Exception) {
+                _errorMessage.value = "Error al obtener métodos de pago: ${e.message}"
+                Log.e("CarritoViewModel", "Error al obtener métodos de pago", e)
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+    fun procesarPagoSimple() {
+        if (userId <= 0) {
+            _errorMessage.value = "Usuario no identificado"
+            return
+        }
+
+        val cart = _cartState.value ?: run {
+            _errorMessage.value = "No hay carrito disponible"
+            return
+        }
+
+        if (cart.total <= 0.0) {
+            _errorMessage.value = "El total del carrito debe ser mayor a cero"
+            return
+        }
+
+        _isLoading.value = true
+        viewModelScope.launch {
+            try {
+                // Monto en centavos para Stripe (mínimo 50 centavos)
+                val amountInCents = (cart.total * 100).toLong().coerceAtLeast(50)
+
+                // Crear un PaymentIntent simple
+                val request = PaymentIntentRequest(
+                    userId = userId,
+                    amount = amountInCents,
+                    cartId = cart.id,
+                    currency = "mxn",
+                    description = "Compra de pasteles - Total: $${cart.total}"
+                )
+
+                // Llamar al backend para crear el PaymentIntent
+                iniciarProcesoDePago(request)
+            } catch (e: Exception) {
+                _errorMessage.value = "Error al procesar pago: ${e.message}"
+                Log.e("CarritoViewModel", "Error al procesar pago", e)
+                _isLoading.value = false
             }
         }
     }
 
-    fun resetPaymentState() {
-        _paymentState.value = PaymentState.Idle
-    }
-}
+    private fun iniciarProcesoDePago(request: PaymentIntentRequest) {
+        viewModelScope.launch {
+            try {
+                paymentRepository.createPaymentIntent(request)
+                    .onSuccess { response ->
+                        // Guardar clientSecret para usarlo con Stripe SDK
+                        _clientSecret.value = response.clientSecret
 
-class CarritoViewModelFactory(
-    private val carritoApiService: CarritoApiService,
-    private val context: Context
-) : ViewModelProvider.Factory {
-    override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        if (modelClass.isAssignableFrom(CarritoViewModel::class.java)) {
-            @Suppress("UNCHECKED_CAST")
-            return CarritoViewModel(carritoApiService, context) as T
+                        // Mostrar la interfaz de pago de Stripe
+                        _mostrarPantallaStripe.value = true
+                        Log.d("CarritoViewModel", "Payment intent creado correctamente")
+                    }
+                    .onFailure { exception ->
+                        _errorMessage.value = "Error al crear intento de pago: ${exception.message}"
+                        Log.e("CarritoViewModel", "Error al crear intento de pago", exception)
+                    }
+            } catch (e: Exception) {
+                _errorMessage.value = "Error al crear intento de pago: ${e.message}"
+                Log.e("CarritoViewModel", "Error al crear intento de pago", e)
+            } finally {
+                _isLoading.value = false
+            }
         }
-        throw IllegalArgumentException("Unknown ViewModel class")
+    }
+
+
+    fun clearErrorMessage() {
+        _errorMessage.value = null
     }
 }
-//Comment
