@@ -13,7 +13,7 @@ import com.google.gson.annotations.SerializedName
  * @property description Descripción opcional del pago
  * @property customerId ID opcional del cliente en Stripe
  */
-data class PaymentIntentRequest(
+data class cdPaymentIntentRequest(
     val userId: Int,
     val amount: Long,
     val currency: String = "mxn",
